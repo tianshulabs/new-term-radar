@@ -28,7 +28,7 @@ DEFAULTS = {
     "competition": {"max_rows": 8, "weak_dr": 30, "location_code": 2840},
     "revenue": {"weekday": 0, "pages_growth": 3, "pages_new": 3, "min_revenue_usd": 500, "category": "", "max_leads": 10},
     "asks": {"weekday": 0, "time": "week", "min_score": 2, "model": "gpt-4.1-mini", "min_volume": 50, "max_leads": 12,
-             "location_code": 2840, "patterns": [
+             "location_code": 2840, "audience": "small AI tools", "ai_only": True, "patterns": [
                  '"is there an ai tool"', '"is there an ai that"', '"is there a tool that"', '"any ai tool for"',
                  '"looking for an ai tool"', '"i wish there was a tool"', '"is there a way to automatically"',
                  '"how do i automate"', '"tool that can automatically"', '"recommend an ai"', '"best ai tool for"',

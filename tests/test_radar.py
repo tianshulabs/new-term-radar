@@ -1049,6 +1049,34 @@ def test_asks_turns_reddit_requests_into_sized_jobs(cfg, tmp_path, monkeypatch):
     assert again["rows"][0]["again"] and again["terms"] == []                            # reported once
 
 
+def test_asks_reads_reddit_newest_first(cfg, monkeypatch):
+    # Sorted by top, AIsa's Reddit search ignores the time window: on 2026-10-20 all 84 posts were years old.
+    asked = []
+    monkeypatch.setattr(asks.social, "reddit", lambda q, **k: (asked.append(k), ([_reddit_post("a", "Is there an app that…")], 1880))[1])
+    cfg["asks"]["patterns"] = ['"is there an app that"']
+    kept, cost, errors = asks.collect(cfg["asks"])
+    assert asked == [{"time": "week", "sort": "new", "limit": 25}] and [p["id"] for p in kept] == ["a"] and not errors
+
+
+def test_asks_audience_and_jobs_beyond_ai_come_from_the_config(tmp_path, monkeypatch):
+    answer = json.dumps([{"i": 0, "kind": "request", "job": "block youtube shorts", "ai": False},
+                         {"i": 1, "kind": "complaint", "job": "summarize long pdfs", "ai": True},
+                         {"i": 2, "kind": "other", "job": "rate my setup", "ai": False}])
+    posts = [_reddit_post("a", "How do I stop YouTube Shorts?"), _reddit_post("b", "PDF summaries are useless"),
+             _reddit_post("c", "Rate my setup")]
+    systems = []
+    monkeypatch.setattr(asks.aisa, "chat", lambda model, system, user: (systems.append(system), answer)[1])
+    cfg = config.load(_write_config(tmp_path))
+    assert (cfg["asks"]["audience"], cfg["asks"]["ai_only"]) == ("small AI tools", True)   # the defaults keep the old behaviour
+    kept, _ = asks.classify("m", posts, cfg["asks"]["audience"], cfg["asks"]["ai_only"])
+    assert [p["job"] for p in kept] == ["summarize long pdfs"] and "a researcher who builds small AI tools. For" in systems[-1]
+    cfg = config.load(_write_config(tmp_path, asks={"audience": "browser extensions and apps", "ai_only": False}))
+    assert cfg["asks"]["min_score"] == 2 and len(cfg["asks"]["patterns"]) == 12                     # the other defaults stay
+    kept, _ = asks.classify("m", posts, cfg["asks"]["audience"], cfg["asks"]["ai_only"])
+    assert [p["job"] for p in kept] == ["block youtube shorts", "summarize long pdfs"]
+    assert "a researcher who builds browser extensions and apps. For" in systems[-1] and "{audience}" not in systems[-1]
+
+
 def test_pains_groups_reviews_posts_and_comments_into_gaps(cfg, monkeypatch):
     monkeypatch.setenv("GOANYAPI_API_KEY", "k")
     ext = "a" * 32

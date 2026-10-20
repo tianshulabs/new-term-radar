@@ -1,13 +1,16 @@
 """Signal ⑦: what people ask for on Reddit ("is there an AI tool that…").
 
 A request is demand said out loud. Once a week (asks.weekday, Monday by default) this searches
-Reddit for the ways people ask for a tool (`patterns`, $0.0019 a query through AIsa), keeps the
-posts of the last week, and a small model sorts each: a request for something that does a job,
+Reddit for the ways people ask for a tool (`patterns`, $0.0019 a query through AIsa), newest first,
+keeps the posts of the last week, and a small model sorts each: a request for something that does a job,
 a complaint about a tool, a solution someone shares, or other. For requests and complaints it
 writes the job as the words a person would search ("convert powerpoint slides to notes"). The
 jobs are sized with Google Ads volumes and the ones with searches are checked for room on page
 one; each of those becomes a lead. Most asks are too specific to have searches yet ("add b roll
 automatically"); the best scored of those are listed too, as ideas rather than keywords.
+
+Who reads the posts (`audience`, "small AI tools" by default) is said to the model, and by
+default only jobs an AI tool could do are kept; `ai_only: false` keeps any job.
 
 Posts are read for research: quote them, do not republish them.
 """
@@ -22,8 +25,9 @@ from . import aisa, competition, snap, social, usecases
 from .i18n import t
 
 CHUNK = 20
+AUDIENCE = "small AI tools"
 SYSTEM = (
-    "You read Reddit posts for a researcher who builds small AI tools. For each post decide its kind: 'request' "
+    "You read Reddit posts for a researcher who builds {audience}. For each post decide its kind: 'request' "
     "(someone asks for a tool or a way to get a job done), 'complaint' (someone is unhappy with a tool or a manual "
     "process), 'solution' (someone shares a tool or a method) or 'other'. For a request or a complaint, write the "
     "JOB as the 2 to 6 words an ordinary person would type into Google to find a tool for it, without brand names "
@@ -37,7 +41,7 @@ SYSTEM = (
 )
 
 
-def parse(answer: str, n: int) -> dict[int, dict]:
+def parse(answer: str, n: int, ai_only: bool = True) -> dict[int, dict]:
     m = re.search(r"\[.*\]", answer, re.S)
     try:
         items = json.loads(m.group(0)) if m else []
@@ -50,7 +54,8 @@ def parse(answer: str, n: int) -> dict[int, dict]:
         except (KeyError, TypeError, ValueError):
             continue
         job = " ".join(str(it.get("job") or "").lower().split())
-        if 0 <= i < n and it.get("kind") in ("request", "complaint") and it.get("ai") and 2 <= len(job.split()) <= 6:
+        if 0 <= i < n and it.get("kind") in ("request", "complaint") and (it.get("ai") or not ai_only) \
+                and 2 <= len(job.split()) <= 6:
             out[i] = {"kind": it["kind"], "job": job}
     return out
 
@@ -69,7 +74,9 @@ def collect(c: dict) -> tuple[list[dict], int, list[str]]:
     stale = set()
     for q in c["patterns"]:
         try:
-            got, spent = social.reddit(q, time=c["time"], sort="top", limit=25)
+            # Newest first: sorted by top, AIsa's Reddit search ignores the time window and answers with
+            # posts from years ago, which the window below then drops (84 of 84 on 2026-10-20).
+            got, spent = social.reddit(q, time=c["time"], sort="new", limit=25)
         except aisa.AisaError as exc:
             errors.append(f"{q}: {exc}")
             continue
@@ -86,15 +93,15 @@ def collect(c: dict) -> tuple[list[dict], int, list[str]]:
     return posts, cost, errors
 
 
-def classify(model: str, posts: list[dict]) -> tuple[list[dict], list[str]]:
-    """The posts that ask for a job an AI tool could do, each with its job phrase."""
+def classify(model: str, posts: list[dict], audience: str = AUDIENCE, ai_only: bool = True) -> tuple[list[dict], list[str]]:
+    """The posts that ask for a job an AI tool could do (any job, without `ai_only`), each with its job phrase."""
     kept, errors = [], []
     for start in range(0, len(posts), CHUNK):
         chunk = posts[start:start + CHUNK]
         user = json.dumps([{"i": i, "title": p["title"], "text": p["text"][:300], "subreddit": p["subreddit"]}
                            for i, p in enumerate(chunk)], ensure_ascii=False)
         try:
-            for i, v in parse(aisa.chat(model, SYSTEM, user), len(chunk)).items():
+            for i, v in parse(aisa.chat(model, SYSTEM.replace("{audience}", audience), user), len(chunk), ai_only).items():
                 kept.append({**chunk[i], **v})
         except aisa.AisaError as exc:
             errors.append(str(exc)[:160])
@@ -105,7 +112,7 @@ def asks(cfg: dict, state: Path, today: date | None = None) -> dict:
     c = cfg["asks"]
     today = today or date.today()
     posts, cost, errors = collect(c)
-    kept, failed = classify(c["model"], posts)
+    kept, failed = classify(c["model"], posts, c["audience"], c["ai_only"])
     jobs: dict[str, dict] = {}
     for p in kept:
         j = jobs.setdefault(p["job"], {"phrase": p["job"], "kind": "generic", "posts": [], "score": 0, "subreddits": []})
