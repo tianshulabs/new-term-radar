@@ -80,6 +80,7 @@ def variants(row: dict, display: str) -> list[str]:
 
 def breakouts(cfg: dict, state: Path) -> dict:
     c = cfg["breakout"]
+    overview = cfg.get("_overview", False)
     since = (date.today() - timedelta(days=c["window_days"])).isoformat()
     q = urllib.parse.quote(f"created:>={since} stars:>={c['min_stars']}")
     repos: list[dict] = []
@@ -91,7 +92,7 @@ def breakouts(cfg: dict, state: Path) -> dict:
     path = state / "gh_stars.json.gz"
     before = snap.load(path)
     rows = score(repos, before, datetime.now(timezone.utc), c["velocity_min"], c["delta_min"])
-    if repos:
+    if repos and not overview:
         snap.save(path, {r["full_name"]: r["stargazers_count"] for r in repos})
     flagged_path = state / "gh_flagged.json.gz"
     flagged: dict[str, str] = snap.load(flagged_path) or {}
@@ -100,9 +101,10 @@ def breakouts(cfg: dict, state: Path) -> dict:
         row["new"] = row["repo"] not in flagged
         flagged.setdefault(row["repo"], today)
     cutoff = (date.today() - timedelta(days=FLAGGED_DAYS)).isoformat()
-    snap.save(flagged_path, {k: v for k, v in flagged.items() if v >= cutoff})
+    if not overview:
+        snap.save(flagged_path, {k: v for k, v in flagged.items() if v >= cutoff})
     terms = []
-    for row in (r for r in rows if r["new"]):
+    for row in (r for r in rows if overview or r["new"]):
         try:
             display = _get(f"/users/{row['owner']}").get("name") or ""
         except OSError:
@@ -113,4 +115,4 @@ def breakouts(cfg: dict, state: Path) -> dict:
                       "note": t("note_breakout", repo=row["repo"], stars=row["stars"], velocity=row["velocity"], gain=gain),
                       "examples": [f"{row['repo']}: {row['description']}"]})
     return {"searched": len(repos), "first_run": before is None, "repos": rows, "terms": terms,
-            "window_days": c["window_days"]}
+            "overview": overview, "window_days": c["window_days"]}

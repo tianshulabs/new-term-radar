@@ -96,7 +96,9 @@ def x_new(cfg: dict, state: Path) -> dict:
     path = state / "x_vocab.json.gz"
     vocab: dict[str, str] | None = snap.load(path)
     first_run = vocab is None
-    rows = [] if first_run else novel_names(posts, vocab, datetime.now(timezone.utc))
+    overview = cfg.get("_overview", False)
+    rows = novel_names(posts, {} if overview else (vocab or {}), datetime.now(timezone.utc)) \
+        if overview or not first_run else []
     # Every name in every fetched post joins the vocabulary, old posts included, so
     # tomorrow only what is new tomorrow is reported.
     vocab = vocab or {}
@@ -104,10 +106,10 @@ def x_new(cfg: dict, state: Path) -> dict:
     for p in posts:
         for term in names(p["text"]):
             vocab[term] = today
-    if posts:   # a failed fetch keeps yesterday's vocabulary
+    if posts and not overview:   # an overview must not consume tomorrow's new names
         snap.save(path, {term: d for term, d in vocab.items() if d >= cutoff})
     return {"accounts": len(handles), "answered": len(data), "posts": len(posts), "cost_micros": cost,
-            "first_run": first_run, "terms": rows}
+            "first_run": first_run, "overview": overview, "terms": rows}
 
 
 _HF_NOISE = re.compile(r"[-_.](gguf|ggml|awq|gptq|fp8|fp16|bf16|int[48]|mlx|exl2|onnx|uncensored|abliterated|"
@@ -132,7 +134,7 @@ def _trending(what: str) -> list[dict]:
         return json.load(res)
 
 
-def _entered(items: list[dict], before: list[str], what: str) -> list[dict]:
+def _entered(items: list[dict], before: list[str], what: str, overview: bool = False) -> list[dict]:
     """The terms of the items that entered the top HF_TOP since the last run, grouped by base name."""
     seen = set(before)
     grouped: dict[str, dict] = {}
@@ -147,10 +149,12 @@ def _entered(items: list[dict], before: list[str], what: str) -> list[dict]:
         g = grouped.setdefault(term, {"term": term, "rank": rank, "copies": 0, "examples": []})
         g["copies"] += 1
         g["examples"].append(f"{m['id']} ({m.get('pipeline_tag') or m.get('sdk') or '?'}, ♥{m.get('likes', 0)})")
+        url = f"https://huggingface.co/{'spaces/' if what == 'spaces' else ''}{m['id']}"
+        g.setdefault("documents", []).append((url, url + "/raw/main/README.md"))
     rows = sorted(grouped.values(), key=lambda g: g["rank"])
     for g in rows:
         g["recent"] = g["copies"]
-        g["note"] = t("note_hf" if what == "models" else "note_hf_space", rank=g["rank"]) + \
+        g["note"] = t(("note_hf_current" if what == "models" else "note_hf_space_current") if overview else ("note_hf" if what == "models" else "note_hf_space"), rank=g["rank"]) + \
             (t("note_hf_copies", n=g["copies"]) if g["copies"] > 1 else "")
     return rows
 
@@ -158,21 +162,23 @@ def _entered(items: list[dict], before: list[str], what: str) -> list[dict]:
 def hf_new(cfg: dict, state: Path) -> dict:
     """Models, and Spaces (the demos people try), that entered Hugging Face's trending top HF_TOP since
     the last run. One public request each; each list keeps its own snapshot."""
-    out = {"first_run": False, "terms": []}
+    overview = cfg.get("_overview", False)
+    out = {"first_run": False, "overview": overview, "terms": []}
     for what, file in (("models", "hf_top.json.gz"), ("spaces", "hf_spaces_top.json.gz")):
         items = _trending(what)
         path = state / file
         before = snap.load(path)
-        if items:
+        if items and not overview:
             snap.save(path, [m["id"] for m in items])
         out[what] = len(items)
-        if before is None:
+        if before is None and not overview:
             out["first_run"] = True
             continue
         have = {r["term"]: r for r in out["terms"]}
-        for r in _entered(items, before, what):
+        for r in _entered(items, [] if overview else before, what, overview=overview):
             if r["term"] in have:       # a model and its demo both new: one lead, both examples
                 have[r["term"]]["examples"] += r["examples"]
+                have[r["term"]].setdefault("documents", []).extend(r["documents"])
             else:
                 out["terms"].append(r)
     out["terms"] = out["terms"][:TOP]

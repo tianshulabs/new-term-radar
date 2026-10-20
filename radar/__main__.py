@@ -40,10 +40,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import asks, breakout, config, gsc, new_sites, notify, pains, report, review, revenue, sellers, sitemaps, sources, store, usecases
+from . import asks, breakout, config, gsc, new_sites, notify, pains, report, research, review, revenue, sellers, sitemaps, sources, store, usecases
 from .i18n import t
 
-SKIPPABLE = {"x", "hf", "breakout", "sitemaps", "newsites", "revenue", "asks", "sellers", "gsc", "review", "judge", "usecases", "tutorials"}
+SKIPPABLE = {"x", "hf", "breakout", "sitemaps", "newsites", "revenue", "asks", "sellers", "gsc", "review", "judge", "usecases", "tutorials", "research"}
 
 
 def run(fn, skip: bool = False) -> dict:
@@ -72,50 +72,69 @@ def cmd_sources(args, cfg: dict, state: Path) -> int:
     extra = {"judge": judged, "record": run(lambda: {"recorded": store.record(conn, report.to_record(cfg, lead))})}
     errors = any(b.get("error") for b in (*blocks.values(), *extra.values()))
     if report.named(cfg, lead) or errors:
-        _finish(args, report.sources(cfg, lead, blocks, extra), f"New-term radar · sources {date.today()}")
+        researched = run(lambda: research.enrich(cfg, lead))
+        _finish(args, research.render(researched) + report.sources(cfg, lead, blocks, extra), f"New-term radar · sources {date.today()}")
     else:
         print(t("sources_quiet") + "; ".join(f"{k} {v.get('posts', v.get('models', t('dash')))}" for k, v in blocks.items()))
     return 0
 
 
 def cmd_daily(args, cfg: dict, state: Path) -> int:
+    overview = cfg.get("_overview", False)
     weekly = args.new_sites or date.today().weekday() == cfg["new_sites"]["weekday"]
     blocks = {
         "x": run(lambda: sources.x_new(cfg, state), "x" in args.skip),
         "hf": run(lambda: sources.hf_new(cfg, state), "hf" in args.skip),
         "breakout": run(lambda: breakout.breakouts(cfg, state), "breakout" in args.skip),
-        "sitemap": run(lambda: sitemaps.diff(cfg, state), "sitemaps" in args.skip),
-        "newsite": run(lambda: new_sites.new_sites(cfg, state), "newsites" in args.skip or not weekly),
-        "revenue": run(lambda: revenue.products(cfg, state), "revenue" in args.skip or not (
+        "sitemap": run(lambda: sitemaps.diff(cfg, state), overview or "sitemaps" in args.skip),
+        "newsite": run(lambda: new_sites.new_sites(cfg, state), overview or "newsites" in args.skip or not weekly),
+        "revenue": run(lambda: revenue.products(cfg, state), overview or "revenue" in args.skip or not (
             args.revenue or date.today().weekday() == cfg["revenue"]["weekday"])),
-        "ask": run(lambda: asks.asks(cfg, state), "asks" in args.skip or not (
+        "ask": run(lambda: asks.asks(cfg, state), overview or "asks" in args.skip or not (
             args.asks or date.today().weekday() == cfg["asks"]["weekday"])),
-        "seller": run(lambda: sellers.sellers(cfg, state), "sellers" in args.skip or not (
+        "seller": run(lambda: sellers.sellers(cfg, state), overview or "sellers" in args.skip or not (
             args.sellers or date.today().weekday() == cfg["sellers"]["weekday"])),
     }
-    found = run(lambda: gsc.gsc_new(cfg), "gsc" in args.skip)
+    found = run(lambda: gsc.gsc_new(cfg), overview or "gsc" in args.skip)
     lead, judged = report.leads(cfg, blocks)
     conn = store.connect(state)
-    extra = {"judge": judged, "record": run(lambda: {"recorded": store.record(conn, report.to_record(cfg, lead))})}
+    extra = {"judge": judged, "record": run(lambda: {"recorded": store.record(conn, report.to_record(cfg, lead))}, overview)}
     # What the viewers of a widely shared walkthrough ask for: the one-click tool behind a ⚡ lead.
     extra["tutorials"] = run(lambda: pains.tutorial_asks(cfg, report.named(cfg, lead)),
-                             "tutorials" in args.skip or not cfg["tutorials"]["max_leads"])
+                             overview or "tutorials" in args.skip or not cfg["tutorials"]["max_leads"])
     # With ① run apart, the daily report lists what that job kept since yesterday.
-    extra["recent_sources"] = run(lambda: {"rows": store.recent_sources(conn)}, not {"x", "hf"} <= args.skip)
+    extra["recent_sources"] = run(lambda: {"rows": store.recent_sources(conn)}, overview or not {"x", "hf"} <= args.skip)
     # The names to read for their generic terms: things, not words that surged (usecases.names_to_read).
     names = usecases.names_to_read(report.to_record(cfg, lead), extra["recent_sources"].get("rows", []))
     repos = {r["term"]: r["repo"] for r in lead if r.get("repo")}
     about = {r["term"]: r["about"] for r in lead if r.get("about")}      # a paying product's own description
     extra["usecases"] = run(lambda: usecases.run(cfg, state, list(dict.fromkeys(names)), repos, texts=about),
-                            "usecases" in args.skip or not cfg["usecases"]["per_day"])
-    run(lambda: store.record(conn, report.usecase_leads(extra["usecases"])))
-    rev = run(lambda: review.review(cfg, conn), "review" in args.skip)
+                            overview or "usecases" in args.skip or not cfg["usecases"]["per_day"])
+    run(lambda: store.record(conn, report.usecase_leads(extra["usecases"])), overview)
+    rev = run(lambda: review.review(cfg, conn), overview or "review" in args.skip)
     summ = run(lambda: store.summary(conn))
-    text = report.daily(cfg, lead, blocks, found, rev, summ, extra)
+    original = report.daily(cfg, lead, blocks, found, rev, summ, extra)
+    researched = run(lambda: research.enrich(cfg, lead))
+    text = research.render(researched) + original
     if args.out:
         Path(args.out).with_suffix(".json").write_text(json.dumps(
-            {"leads": lead, **blocks, "gsc": found, "review": rev, "summary": summ, "keywords": extra["usecases"]}, ensure_ascii=False, indent=1, default=str))
-    _finish(args, text, f"New-term radar {date.today()}")
+            {"mode": "overview" if overview else "daily", "leads": lead, **blocks, "gsc": found,
+             "review": rev, "summary": summ, "judge": judged, "research": researched, "keywords": extra["usecases"], "tutorials": extra["tutorials"], "original_md": original}, ensure_ascii=False, indent=1, default=str))
+    _finish(args, text, f"New-term radar{' · current overview' if overview else ''} {date.today()}")
+    return 0
+
+
+def cmd_enrich(args, cfg: dict) -> int:
+    source = Path(args.input)
+    payload = json.loads(source.read_text())
+    original = payload.get("original_md")
+    if original is None:
+        original = source.with_suffix(".md").read_text()
+    researched = run(lambda: research.enrich(cfg, payload["leads"]))
+    payload.update(research=researched, original_md=original)
+    if args.out:
+        Path(args.out).with_suffix(".json").write_text(json.dumps(payload, ensure_ascii=False, indent=1))
+    _finish(args, research.render(researched) + original, f"New-term radar · research {date.today()}")
     return 0
 
 
@@ -183,11 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         return serve_mcp()
     prog = "python -m radar" if __package__ == "radar" else "new-term-radar"  # installed, the package has another name
     p = argparse.ArgumentParser(prog=prog, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=["daily", "sources", "keywords", "leads", "pains"])
+    p.add_argument("command", choices=["daily", "sources", "keywords", "leads", "pains", "enrich"])
     p.add_argument("names", nargs="*", help="for `keywords`: the names to read")
     p.add_argument("--repo", action="append", default=[], metavar="NAME=OWNER/REPO", help="for `keywords`: a name's GitHub repository")
     p.add_argument("--days", type=int, default=7, help="for `leads`: how far back")
     p.add_argument("--json", action="store_true", help="for `keywords` and `leads`: print JSON")
+    p.add_argument("--input", help="enrich only: existing report JSON, with Markdown beside it")
     p.add_argument("--config", default="config.json")
     p.add_argument("--state", default="state", help="directory for radar.db and the snapshots")
     p.add_argument("--out", help="write the report (Markdown) here; `daily` also writes a .json beside it")
@@ -197,8 +217,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--asks", action="store_true", help="run the weekly Reddit asks signal today")
     p.add_argument("--sellers", action="store_true", help="run the weekly new-sellers signal today")
     p.add_argument("--extension", action="append", default=[], metavar="ID", help="for `pains`: a Chrome extension to read the reviews of")
+    p.add_argument("--overview", action="store_true", help="daily only: current X/HF/GitHub candidates, without changing discovery history")
     p.add_argument("--mail", action="store_true", help="mail the report (see radar/notify.py)")
     args = p.parse_args(argv)
+    if args.overview and args.command != "daily":
+        p.error("--overview requires daily")
+    if args.command == "enrich" and not args.input:
+        p.error("enrich requires --input")
+    if args.input and args.command != "enrich":
+        p.error("--input requires enrich")
     args.skip = {s for s in args.skip.split(",") if s}
     unknown = args.skip - SKIPPABLE
     if unknown:
@@ -209,8 +236,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "keywords" and not args.names:
         p.error("keywords: give at least one name")
     cfg = config.load(Path(args.config))
+    cfg["_overview"] = args.overview
     if "judge" in args.skip:
         cfg["judge"]["model"] = ""
+    if "research" in args.skip:
+        cfg["research"]["enabled"] = False
+    if args.command == "enrich":
+        return cmd_enrich(args, cfg)
     state.mkdir(parents=True, exist_ok=True)
     if args.command == "keywords":
         return cmd_keywords(args, cfg, state)

@@ -18,6 +18,7 @@ DEFAULTS = {
     "known_terms": [],
     "stop_words": [],
     "judge": {"model": "gpt-4.1-mini", "min_score": 0.5},
+    "research": {"enabled": True, "model": "", "sources": {}},
     "breakout": {"window_days": 14, "min_stars": 300, "velocity_min": 200, "delta_min": 400},
     "new_sites": {"queries": {"ai": "%ai%"}, "weekday": 0, "window_days": 90, "min_etv": 1000, "min_keywords": 20},
     "review": {"after_days": 14, "per_day": 5},

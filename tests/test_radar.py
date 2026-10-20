@@ -882,7 +882,7 @@ def _serp(results, ads=False):
 
 def test_page_one_verdicts():
     assert competition.verdict(3, None) == "open" and competition.verdict(0, 15) == "open"
-    assert competition.verdict(0, 55) == "crowded" and competition.verdict(None, None) == "crowded"
+    assert competition.verdict(0, 55) == "crowded" and competition.verdict(None, None) == "unknown"
     assert competition.verdict(1, 30) == "mixed" and competition.verdict(None, 30) == "mixed"
     assert competition.page_kind("youtube.com", "https://youtube.com/watch?v=1", "x") == "video"
     assert competition.page_kind("headshotpro.com", "https://headshotpro.com/", "Free AI Headshot Generator") == "tool"
@@ -1022,7 +1022,7 @@ from radar import asks, pains  # noqa: E402
 
 def _reddit_post(pid, title, score=12, sub="VideoEditors"):
     return {"id": pid, "title": title, "text": "", "score": score, "comments": 3, "subreddit": sub,
-            "url": f"https://www.reddit.com/r/{sub}/{pid}", "created": 0}
+            "url": f"https://www.reddit.com/r/{sub}/{pid}", "created": datetime.now(timezone.utc).timestamp()}
 
 
 def test_asks_turns_reddit_requests_into_sized_jobs(cfg, tmp_path, monkeypatch):
@@ -1145,3 +1145,30 @@ def test_seller_kinds_fall_back_to_keyword_rules():
             {"host": "murciatoday.com", "title": "Murcia Today News", "description": ""}]
     got, error = sellers.kinds("gpt-4.1-mini", rows)          # the call is blocked in tests: rules take over
     assert got == {"notchlive.app": "ai", "lexingtonthemes.com": "template", "murciatoday.com": "donation"} and error
+
+
+def test_reddit_date_filter_distrusts_provider_time_parameter(cfg, monkeypatch):
+    now = datetime.now(timezone.utc).timestamp()
+    posts = [_reddit_post('recent', 'new request'), _reddit_post('old', 'old request'), _reddit_post('missing', 'unknown date')]
+    posts[1]['created'] = now - 365 * 86400
+    posts[2]['created'] = 0
+    cfg['asks']['patterns'] = ['one', 'two']
+    monkeypatch.setattr(asks.social, 'reddit', lambda *a, **k: (posts, 1880))
+    kept, cost, errors = asks.collect(cfg['asks'])
+    assert [p['id'] for p in kept] == ['recent']
+    assert cost == 3760 and '2 posts outside' in errors[0]
+    assert not asks.within_window(now + 3600, 'week', now)
+    assert asks.within_window(now - 7 * 86400, 'week', now)
+    assert not asks.within_window(now - 7 * 86400 - 1, 'week', now)
+
+
+def test_missing_competition_does_not_demote_and_is_visible(cfg, tmp_path, monkeypatch):
+    cfg['competition']['max_rows'] = 1
+    monkeypatch.setattr(competition, 'page_one', lambda *a: ({'results': [], 'ads': False, 'features': []}, 0))
+    monkeypatch.setattr(competition, 'difficulty', lambda *a: ({}, 0))
+    monkeypatch.setattr(competition, 'ratings', lambda *a: ({}, 0))
+    rows = [{'phrase': 'new term', 'decision': 'prioritize'}]
+    competition.assess(rows, cfg, tmp_path)
+    assert rows[0]['competition']['verdict'] == 'unknown'
+    assert rows[0]['decision'] == 'prioritize'
+    assert 'insufficient data' in report._page_one(rows[0]['competition'])

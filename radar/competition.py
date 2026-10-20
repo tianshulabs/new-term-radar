@@ -118,7 +118,9 @@ def supply(rows: list[dict]) -> tuple[int, list[str]]:
 def verdict(weak: int | None, kd: int | None) -> str:
     if (weak is not None and weak >= 3) or (kd is not None and kd < 20):
         return "open"
-    if (weak in (0, None)) and (kd is None or kd >= 40):
+    if kd is None and weak in (0, None):
+        return "unknown"
+    if weak in (0, None) and kd is not None and kd >= 40:
         return "crowded"
     return "mixed"
 

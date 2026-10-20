@@ -334,3 +334,17 @@ The diagram is drawn by `docs/make_diagram.py` (needs `rsvg-convert` and `ffmpeg
 MIT. Extracted from the radar that runs daily behind [agentskillshub.top](https://agentskillshub.top).
 
 <!-- mcp-name: io.github.zhuyansen/new-term-radar -->
+
+### First-day overview and reruns
+
+Run `python -m radar daily --overview --out overview.md` to see current candidates, including previously seen names. This covers X posts from the last 30 hours, the HF top 50 and qualifying GitHub repos, not confirmed launches today. Overview mode leaves snapshots and discovery history unchanged, skips trend-review writes and sitemap/new-site/GSC incremental queries, and does not record candidates for review. Use normal `daily` for ongoing change detection. Empty daily reports explain the baseline or lack of new candidates instead of rendering an empty table.
+
+### Separate name-judge endpoint
+
+Set `RADAR_LLM_BASE_URL` (including `/v1`) and `RADAR_LLM_API_KEY` for an OpenAI-compatible Chat Completions service; select its model in `judge.model`. Custom endpoints require their own key and never inherit the AIsa data key. Loopback endpoints bypass proxies. Without a custom URL, the judge still uses AIsa. Data API routing remains unchanged.
+
+### Agent research after discovery
+
+`daily` and `sources` now explain every candidate above the name threshold before the original signal report. Evidence comes from exact Hugging Face model cards and GitHub README IDs in the report, original posts, and HTTPS pages explicitly mapped by term in `research.sources`. This is bounded source retrieval, not unrestricted web search. Author documentation is not independent verification; missing evidence, fetch failures and incomplete model responses remain visible.
+
+Run `python -m radar enrich --input report.json --out enriched.md` to enrich an existing report without re-fetching paid signals or changing discovery history. The first run needs the matching Markdown file. Re-enrichment retains the original report without stacking earlier summaries. Only `--mail` sends mail. The output JSON keeps evidence text and provenance. `research.model` defaults to `judge.model`; the stage uses one model call per four candidates plus one synthesis call. These model costs are not included in the report's AIsa signal subtotal. Disable with `--skip research` or `research.enabled=false`.

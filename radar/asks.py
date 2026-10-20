@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from . import aisa, competition, snap, social, usecases
@@ -55,9 +55,18 @@ def parse(answer: str, n: int) -> dict[int, dict]:
     return out
 
 
+def within_window(created: float, window: str, now: float | None = None) -> bool:
+    seconds = {"hour": 3600, "day": 86400, "week": 7 * 86400, "month": 31 * 86400, "year": 366 * 86400}.get(window)
+    if seconds is None:
+        return True
+    now = datetime.now(timezone.utc).timestamp() if now is None else now
+    return created > 0 and now - seconds <= created <= now
+
+
 def collect(c: dict) -> tuple[list[dict], int, list[str]]:
     """This week's posts for every pattern, once each, above the score floor."""
     posts, cost, errors, seen = [], 0, [], set()
+    stale = set()
     for q in c["patterns"]:
         try:
             got, spent = social.reddit(q, time=c["time"], sort="top", limit=25)
@@ -66,9 +75,14 @@ def collect(c: dict) -> tuple[list[dict], int, list[str]]:
             continue
         cost += spent
         for p in got:
+            if not within_window(p.get("created", 0), c["time"]):
+                stale.add(p["id"])
+                continue
             if p["id"] not in seen and p["score"] >= c["min_score"] and "circlejerk" not in p["subreddit"].lower():
                 seen.add(p["id"])
                 posts.append(p)
+    if stale:
+        errors.append(f"Reddit returned {len(stale)} posts outside the requested {c['time']} window or without valid dates; excluded")
     return posts, cost, errors
 
 

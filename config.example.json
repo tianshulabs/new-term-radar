@@ -33,6 +33,7 @@
   "stop_words": [],
 
   "judge": {"model": "gpt-4.1-mini", "min_score": 0.5},
+  "research": {"enabled": true, "model": "", "sources": {}},
   "breakout": {"window_days": 14, "min_stars": 300, "velocity_min": 200, "delta_min": 400},
   "new_sites": {"queries": {"ai": "%ai%", "video": "%video%"}, "weekday": 0},
   "revenue": {"weekday": 0, "pages_growth": 3, "pages_new": 3, "min_revenue_usd": 500, "category": "", "max_leads": 10},

@@ -327,3 +327,25 @@ python -m pytest -q tests
 ## 许可
 
 MIT。这套雷达提取自 [agentskillshub.top](https://agentskillshub.top) 背后每天在跑的版本。
+
+### 首日概览与重跑
+
+需要查看当前候选（包括已见过的名字）时，运行 `python -m radar daily --overview --out overview.md`。概览覆盖 X 近 30 小时帖子、HF 热门前 50 与达到涨星阈值的 GitHub 仓库；这些不是已确认的今日新发布。此模式不更新快照、不记录新发现、不进入趋势复盘，也不执行 sitemap、新站或 GSC 增量查询。日常监测继续使用不带 `--overview` 的 `daily`。无新增候选时，报告显示原因而非空表。
+
+### 独立的名字判断接口
+
+可通过 `RADAR_LLM_BASE_URL`（包含 `/v1`，例如 `http://127.0.0.1:3425/v1`）和 `RADAR_LLM_API_KEY` 配置兼容 Chat Completions 的模型服务，模型名称仍由 `judge.model` 指定。自定义接口必须提供独立密钥，不会回退使用 AIsa 密钥；本机回环地址直连，不经过系统代理。未设置自定义地址时仍使用 AIsa。X、Trends 和新站数据始终保留各自的 AIsa 配置。
+
+### 报告后的 Agent 资料解读
+
+`daily` 和 `sources` 默认在发现、评分之后补充资料，再生成报告。覆盖全部通过名称门槛的候选，读取报告中明确的 HF 模型卡、GitHub README，以及 `research.sources` 中按词配置的 HTTPS 资料页；X 原帖会保留为上下文。目前不做全网自动搜索，未找到文档的条目会注明证据不足。
+
+最终报告先给综合总结，再逐项说明「是什么、能做什么、与你关注方向的关系、边界与疑点」，并附来源。作者文档不等于独立测评；只有原帖、抓取失败、模型回复缺失等情况会明确标记。原始信号报告保留在后面，JSON 保存本次证据文本、抓取失败、模型和生成时间。
+
+只给已有报告补资料，不重新付费抓取信号、不改变发现历史：
+
+```bash
+python -m radar enrich --input report.json --out enriched.md
+```
+
+首次补充需要同名的 `report.md`。增强报告可以再次输入，不会重复叠加解读。添加 `--mail` 才发送邮件。模型默认复用 `judge.model` 和独立模型接口，也可以设置 `research.model`。每 4 个候选一次模型调用，另加一次综合总结；资料读取和模型费用与原信号费用分开，报告中的 AIsa 信号金额不含这些模型调用。可用 `--skip research` 或 `research.enabled=false` 关闭。

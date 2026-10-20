@@ -16,6 +16,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
+import urllib.parse
 
 from . import UA
 
@@ -51,12 +52,15 @@ def _no_key() -> str:
     raise AisaError("no AIsa key: set AISA_API_KEY, or log in with the AIsa CLI (`aisa login`)")
 
 
-def _post(url: str, body: dict, timeout: int) -> dict:
+def _post(url: str, body: dict, timeout: int, *, api_key: str | None = None) -> dict:
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
-        "Content-Type": "application/json", "Authorization": f"Bearer {key()}",
+        "Content-Type": "application/json", "Authorization": f"Bearer {key() if api_key is None else api_key}",
         "User-Agent": UA, "x-aisa-source": "new-term-radar"})
+    opener = urllib.request.urlopen
+    if urllib.parse.urlsplit(url).hostname in {"127.0.0.1", "localhost", "::1"}:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
+        with opener(req, timeout=timeout) as res:
             return json.load(res)
     except urllib.error.HTTPError as exc:
         raise AisaError(f"HTTP {exc.code}: {' '.join(exc.read().decode('utf-8', 'replace').split())[:200]}") from exc
@@ -93,8 +97,16 @@ def call_all(calls: list[dict]) -> tuple[dict[str, dict], int]:
 
 
 def chat(model: str, system: str, user: str, max_tokens: int = 1500) -> str:
-    body = _post(CHAT, {"model": model, "temperature": 0, "max_tokens": max_tokens, "messages": [
-        {"role": "system", "content": system}, {"role": "user", "content": user}]}, CHAT_TIMEOUT)
+    custom_base = os.environ.get("RADAR_LLM_BASE_URL", "").strip()
+    api_key = None
+    url = CHAT
+    if custom_base:
+        api_key = os.environ.get("RADAR_LLM_API_KEY", "").strip()
+        if not api_key:
+            raise AisaError("RADAR_LLM_API_KEY is required with RADAR_LLM_BASE_URL")
+        url = custom_base.rstrip("/") + "/chat/completions"
+    body = _post(url, {"model": model, "temperature": 0, "max_tokens": max_tokens, "messages": [
+        {"role": "system", "content": system}, {"role": "user", "content": user}]}, CHAT_TIMEOUT, api_key=api_key)
     try:
         return body["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:

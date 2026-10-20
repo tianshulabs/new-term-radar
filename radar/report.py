@@ -23,6 +23,7 @@ def leads(cfg: dict, blocks: dict[str, dict]) -> tuple[list[dict], dict]:
             row["kinds"].append(kind)
             row["signals"].append(r.get("note") or t("note_surge", label=t(f"kind_{kind}"), n=r["recent"], lift=r["lift"]))
             row["examples"] += r.get("examples", [])
+            row.setdefault("documents", []).extend(r.get("documents", []))
             row["posts"] += r.get("posts", [])
             row["variants"] += [v for v in r.get("variants", []) if v not in row["variants"]]
             if r.get("repo"):
@@ -48,6 +49,8 @@ def named(cfg: dict, lead: list[dict]) -> list[dict]:
 
 
 def to_record(cfg: dict, lead: list[dict]) -> list[dict]:
+    if cfg.get("_overview"):
+        return []
     return [r for r in named(cfg, lead)[:SHOWN] if not r["known"]]
 
 
@@ -85,7 +88,7 @@ def topic_lines(cfg: dict, lead: list[dict], b: dict[str, dict], gsc: dict) -> l
         queries = [q for q in gsc.get("queries") or [] if pat.search(q["query"])]
         lines += ["", t("topic_h", name=name), ""]
         if not (hits or repos or queries):
-            lines.append(t("topic_none"))
+            lines.append(t("topic_overview_none" if cfg.get("_overview") else "topic_none"))
             continue
         lines += [t("topic_lead", term=r["term"], signals="; ".join(r["signals"])) for r in hits[:10]]
         lines += [t("topic_repo", repo=r["repo"], stars=r["stars"], velocity=r["velocity"], desc=r["description"][:60]) for r in repos[:8]]
@@ -99,7 +102,7 @@ def _breakout_lines(bo: dict, cfg: dict) -> list[str]:
     if not repos:
         return lines + [t("recent_none", why=_state(bo, t("no_breakouts")))]
     lines += [t("breakout_cols"), "|---|---|---|---|---|---|"]
-    return lines + [f"| {'🆕 ' if r.get('new') else ''}[{r['repo']}](https://github.com/{r['repo']}) | {r['stars']} | {r['velocity']} | "
+    return lines + [f"| {'🆕 ' if r.get('new') and not cfg.get('_overview') else ''}[{r['repo']}](https://github.com/{r['repo']}) | {r['stars']} | {r['velocity']} | "
                     f"{'+' + str(r['delta']) if r['delta'] is not None else t('dash')} | {r['age_days']} | "
                     f"{_cell(r['description'][:60])} |" for r in repos]
 
@@ -140,7 +143,7 @@ def _asks_lines(ak: dict, cfg: dict) -> list[str]:
     lines = ["", t("asks_h"), ""]
     rows, quiet = ak.get("rows") or [], ak.get("quiet") or []
     if not rows and not quiet:
-        return lines + [t("recent_none", why=ak.get("error") or t("asks_none", read=ak.get("read", 0), asks=ak.get("asks", 0)))]
+        return lines + [t("recent_none", why=ak.get("error") or "; ".join(ak.get("errors") or []) or t("asks_none", read=ak.get("read", 0), asks=ak.get("asks", 0)))]
     lines += [t("asks_intro", read=ak["read"], asks=ak["asks"], unsized=ak["unsized"], min=cfg["asks"]["min_volume"])]
     if rows:
         lines += ["", t("asks_cols"), "|---|---|---|---|---|---|"]
@@ -246,10 +249,10 @@ def _status_lines(b: dict[str, dict], extra: dict[str, dict]) -> list[str]:
     lines = ["", t("status_h"), ""]
     if not x.get("skipped"):
         ok = "" if x.get("error") else t("st_x_ok", answered=x["answered"], accounts=x["accounts"], posts=x["posts"]) + \
-            (t("st_x_first") if x.get("first_run") else "")
+            (t("st_overview") if x.get("overview") else t("st_x_first") if x.get("first_run") else "")
         lines.append(t("st_x", state=_state(x, ok)))
     if not hf.get("skipped"):
-        ok = "" if hf.get("error") else t("st_hf_ok", models=hf["models"], spaces=hf.get("spaces", 0)) + (t("st_first") if hf.get("first_run") else "")
+        ok = "" if hf.get("error") else t("st_hf_ok", models=hf["models"], spaces=hf.get("spaces", 0)) + (t("st_overview") if hf.get("overview") else t("st_first") if hf.get("first_run") else "")
         lines.append(t("st_hf", state=_state(hf, ok)))
     ok = "" if bo.get("error") or bo.get("skipped") else t("st_breakout_ok", n=bo["searched"]) + \
         (t("st_breakout_first") if bo.get("first_run") else "")
@@ -273,12 +276,29 @@ def _status_lines(b: dict[str, dict], extra: dict[str, dict]) -> list[str]:
     for key, label in (("judge", "st_judge"), ("record", "st_record")):
         if extra.get(key, {}).get("error"):
             lines.append(t(label, state=extra[key]["error"]))
+    judged = extra.get("judge", {})
+    if judged.get("judged") and not judged.get("error"):
+        lines.append(t("st_judge", state=t("st_judge_ok", n=judged["judged"])))
     return lines
 
 
 def daily(cfg: dict, lead: list[dict], b: dict[str, dict], gsc: dict, rev: dict, summ: dict, extra: dict[str, dict]) -> str:
-    lines = [t("title"), *keyword_table(cfg, extra.get("usecases", {"skipped": True})), "", t("leads_h"), "", t("leads_cols"), "|---|---|---|---|---|---|"]
+    overview = cfg.get("_overview", False)
+    lines = [t("overview_title" if overview else "title"), ""]
+    if overview:
+        lines += [t("overview_intro"), ""]
+    if not overview:
+        lines += keyword_table(cfg, extra.get("usecases", {"skipped": True}))
+    lines += [t("overview_leads_h" if overview else "leads_h"), ""]
     names_ = named(cfg, lead)
+    if names_:
+        lines += [t("leads_cols"), "|---|---|---|---|---|---|"]
+    elif overview:
+        lines.append(t("overview_none"))
+    elif any(b.get(k, {}).get("first_run") for k in ("x", "hf")):
+        lines.append(t("leads_baseline"))
+    else:
+        lines.append(t("leads_none"))
     for r in names_[:SHOWN]:
         ex = _cell(" / ".join(e[:50] for e in r["examples"][:2]))
         lines.append(f"| **{r['term']}**{_marks(r)} | {'; '.join(r['signals'])} | {_score(r)} | {r['known'] or t('none')} | "
@@ -302,7 +322,8 @@ def daily(cfg: dict, lead: list[dict], b: dict[str, dict], gsc: dict, rev: dict,
     lines += _seller_lines(b.get("seller", {"skipped": True}))
     lines += _tutorial_lines(extra.get("tutorials", {"skipped": True}))
     lines += _gsc_lines(gsc)
-    lines += _review_lines(cfg, rev, summ)
+    if not overview:
+        lines += _review_lines(cfg, rev, summ)
     lines += _status_lines(b, extra)
     lines.append(t("cost", cost=_cost(b["x"], rev, b.get("newsite", {}), b.get("ask", {}), b.get("seller", {}), extra.get("usecases", {}),
                                       extra.get("tutorials", {}))))
