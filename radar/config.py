@@ -1,7 +1,8 @@
 """config.json: what to watch. Copy config.example.json and edit it.
 
 Everything has a default except the X accounts and the sitemaps, which only you can
-choose. Secrets are never read from this file; they come from the environment.
+choose. Optional x_posts_file (or env RADAR_X_POSTS_FILE) injects X timelines without
+AIsa. Secrets are never read from this file; they come from the environment.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from . import i18n, terms
 DEFAULTS = {
     "lang": "en",
     "x_accounts": {"labs": [], "bloggers": []},
+    "x_posts_file": "",   # optional JSON/NDJSON dump of X posts; env RADAR_X_POSTS_FILE wins
     "sitemaps": {},
     "topics": {},
     "known_terms": [],

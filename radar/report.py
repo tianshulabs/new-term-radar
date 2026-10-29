@@ -71,7 +71,11 @@ def _score(r: dict) -> str:
 
 
 def _state(block: dict, ok: str) -> str:
-    return block.get("error") or (t("skipped") if block.get("skipped") else ok)
+    if block.get("error"):
+        return block["error"]
+    if block.get("skipped"):
+        return block.get("reason") or t("skipped")
+    return ok
 
 
 def _cost(*blocks: dict) -> str:
@@ -109,7 +113,8 @@ def _breakout_lines(bo: dict, cfg: dict) -> list[str]:
 
 def _new_site_lines(ns: dict, cfg: dict) -> list[str]:
     if ns.get("skipped"):
-        return []
+        return ["", t("newsite_h", days=cfg["new_sites"]["window_days"], etv=cfg["new_sites"]["min_etv"], kw=cfg["new_sites"]["min_keywords"]), "",
+                t("recent_none", why=ns.get("reason") or t("skipped"))] if ns.get("reason") else []
     c = cfg["new_sites"]
     lines = ["", t("newsite_h", days=c["window_days"], etv=c["min_etv"], kw=c["min_keywords"]), ""]
     sites = ns.get("sites") or []
@@ -139,7 +144,7 @@ def _revenue_lines(rv: dict, cfg: dict) -> list[str]:
 
 def _asks_lines(ak: dict, cfg: dict) -> list[str]:
     if ak.get("skipped"):
-        return []
+        return ["", t("asks_h"), "", t("recent_none", why=ak.get("reason") or t("skipped"))] if ak.get("reason") else []
     lines = ["", t("asks_h"), ""]
     rows, quiet = ak.get("rows") or [], ak.get("quiet") or []
     if not rows and not quiet:
@@ -165,7 +170,7 @@ def _asks_lines(ak: dict, cfg: dict) -> list[str]:
 
 def _seller_lines(sl: dict) -> list[str]:
     if sl.get("skipped"):
-        return []
+        return ["", t("sellers_h"), "", t("recent_none", why=sl.get("reason") or t("skipped"))] if sl.get("reason") else []
     lines = ["", t("sellers_h"), ""]
     rows = sl.get("sellers") or []
     if not rows:
@@ -247,22 +252,22 @@ def _review_lines(cfg: dict, rev: dict, summ: dict) -> list[str]:
 def _status_lines(b: dict[str, dict], extra: dict[str, dict]) -> list[str]:
     x, hf, bo, sm = b["x"], b["hf"], b["breakout"], b["sitemap"]
     lines = ["", t("status_h"), ""]
-    if not x.get("skipped"):
-        ok = "" if x.get("error") else t("st_x_ok", answered=x["answered"], accounts=x["accounts"], posts=x["posts"]) + \
+    if not x.get("skipped") or x.get("reason"):
+        ok = "" if x.get("error") or x.get("skipped") else t("st_x_ok", answered=x["answered"], accounts=x["accounts"], posts=x["posts"]) + \
             (t("st_overview") if x.get("overview") else t("st_x_first") if x.get("first_run") else "")
         lines.append(t("st_x", state=_state(x, ok)))
-    if not hf.get("skipped"):
-        ok = "" if hf.get("error") else t("st_hf_ok", models=hf["models"], spaces=hf.get("spaces", 0)) + (t("st_overview") if hf.get("overview") else t("st_first") if hf.get("first_run") else "")
+    if not hf.get("skipped") or hf.get("reason"):
+        ok = "" if hf.get("error") or hf.get("skipped") else t("st_hf_ok", models=hf["models"], spaces=hf.get("spaces", 0)) + (t("st_overview") if hf.get("overview") else t("st_first") if hf.get("first_run") else "")
         lines.append(t("st_hf", state=_state(hf, ok)))
     ok = "" if bo.get("error") or bo.get("skipped") else t("st_breakout_ok", n=bo["searched"]) + \
         (t("st_breakout_first") if bo.get("first_run") else "")
     lines.append(t("st_breakout", state=_state(bo, ok)))
     sl = b.get("seller", {"skipped": True})
-    if not sl.get("skipped"):
-        lines.append(t("st_sellers", state=_state(sl, "" if sl.get("error") else t("st_sellers_ok", links=sl["links"], new=sl["new"]))))
+    if not sl.get("skipped") or sl.get("reason"):
+        lines.append(t("st_sellers", state=_state(sl, "" if sl.get("error") or sl.get("skipped") else t("st_sellers_ok", links=sl["links"], new=sl["new"]))))
     ak = b.get("ask", {"skipped": True})
-    if not ak.get("skipped"):
-        lines.append(t("st_asks", state=_state(ak, "" if ak.get("error") else t("st_asks_ok", read=ak["read"], asks=ak["asks"]))))
+    if not ak.get("skipped") or ak.get("reason"):
+        lines.append(t("st_asks", state=_state(ak, "" if ak.get("error") or ak.get("skipped") else t("st_asks_ok", read=ak["read"], asks=ak["asks"]))))
     rv = b.get("revenue", {"skipped": True})
     if not rv.get("skipped") or rv.get("no_key"):
         ok = t("revenue_nokey_short") if rv.get("no_key") else "" if rv.get("error") else t("st_revenue_ok", n=rv["read"]) + \
@@ -372,7 +377,7 @@ def _page_one_lines(cfg: dict, uc: dict) -> list[str]:
 def keyword_table(cfg: dict, uc: dict) -> list[str]:
     """One table for the day: the names read and the generic terms behind them, each with a decision."""
     if uc.get("skipped"):
-        return []
+        return ["", t("uc_h"), "", t("recent_none", why=uc.get("reason") or t("skipped"))] if uc.get("reason") else []
     lines = ["", t("uc_h"), ""]
     if uc.get("error"):
         return lines + [uc["error"]]
