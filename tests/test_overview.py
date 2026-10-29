@@ -8,6 +8,7 @@ from radar import breakout, config, report, snap, sources, store
 
 
 def test_x_overview_includes_seen_names_without_changing_vocabulary(cfg, tmp_path, monkeypatch):
+    monkeypatch.setenv("AISA_API_KEY", "test-key")  # file path unused; allow AIsa branch under has_key()
     cfg.update(_overview=True, x_accounts={"labs": ["a"]})
     path = tmp_path / "x_vocab.json.gz"
     snap.save(path, {"qwen3.9": "2026-10-01", "older-name": "2026-09-01"})

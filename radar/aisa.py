@@ -1,6 +1,8 @@
-"""Client for AIsa, the radar's one paid dependency: its tool router (X posts, Google
+"""Client for AIsa, the radar's paid dependency: its tool router (optional X posts, Google
 Trends and whois data through DataForSEO) and its OpenAI-compatible chat endpoint (the
-name judge). One key: AISA_API_KEY, or the one the AIsa CLI stores when you log in.
+name judge). AIsa is not X-only. One key: AISA_API_KEY, or the one the AIsa CLI stores
+when you log in. Without a key, has_key()/llm_ready() let the free path auto-skip cleanly;
+X can also be injected via RADAR_X_POSTS_FILE (see sources.x_new).
 
 The tool router runs a batch's calls one by one, about 10 s each, so batches are kept to
 BATCH calls and the timeout is long. Every call is billed: a failed batch is never
@@ -50,6 +52,28 @@ def key() -> str:
 
 def _no_key() -> str:
     raise AisaError("no AIsa key: set AISA_API_KEY, or log in with the AIsa CLI (`aisa login`)")
+
+
+def has_key() -> bool:
+    """True when key() would succeed (env or AIsa CLI login). Does not raise."""
+    if os.environ.get("AISA_API_KEY", "").strip():
+        return True
+    home = Path.home() / ".aisa"
+    try:
+        if (home / "key").exists() and (home / "key").read_text().strip():
+            return True
+        if (home / "tokens.json").exists():
+            return bool(json.loads((home / "tokens.json").read_text()).get("accessToken") or "")
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def llm_ready() -> bool:
+    """True when chat() can run: a custom OpenAI-compatible pair, or an AIsa key."""
+    if os.environ.get("RADAR_LLM_BASE_URL", "").strip():
+        return bool(os.environ.get("RADAR_LLM_API_KEY", "").strip())
+    return has_key()
 
 
 def _post(url: str, body: dict, timeout: int, *, api_key: str | None = None) -> dict:

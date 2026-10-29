@@ -1,8 +1,12 @@
 """Signal ①, the sources: where a new name is said first.
 
-x_new    names in the last day's posts of the accounts in config.json ("x_accounts",
-         read through AIsa) that none of those accounts has used in the last VOCAB_DAYS.
-         The vocabulary is kept in the state directory; the first run only builds it.
+x_new    names in the last day's posts of the accounts in config.json ("x_accounts")
+         that none of those accounts has used in the last VOCAB_DAYS. Posts come from
+         AIsa when AISA_API_KEY is set, or from a JSON/NDJSON dump via RADAR_X_POSTS_FILE
+         / config x_posts_file (so another tool, e.g. Grok Bot, can inject timelines).
+         Without either, this signal skips with a one-line reason; the rest of the radar
+         still runs. The vocabulary is kept in the state directory; the first run only
+         builds it.
 hf_new   models that entered Hugging Face's trending top HF_TOP since the last run (the
          public API, no key). Quantised and fine-tuned copies of one model are grouped
          under its base name.
@@ -10,6 +14,7 @@ hf_new   models that entered Hugging Face's trending top HF_TOP since the last r
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -82,17 +87,116 @@ def novel_names(posts: list[dict], vocab: dict[str, str], now: datetime) -> list
     return _drop_nested(kept)[:TOP]
 
 
-def x_new(cfg: dict, state: Path) -> dict:
-    handles = accounts(cfg)
-    if not handles:
-        return {"skipped": True}
-    data, cost = aisa.call_all([{"call_id": h, "tool": "get_twitter_user_last_tweets", "arguments": {"userName": h}}
-                                for h in handles])
+def x_posts_file(cfg: dict) -> Path | None:
+    """Path from RADAR_X_POSTS_FILE or config x_posts_file; relative paths are under the config dir."""
+    raw = (os.environ.get("RADAR_X_POSTS_FILE") or cfg.get("x_posts_file") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(cfg.get("_dir") or Path(".")) / path
+    return path
+
+
+def _parse_created(value) -> datetime | None:
+    """ISO-8601, Unix seconds/ms, or Twitter's createdAt string."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e12:  # milliseconds
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    s = str(value).strip()
+    try:
+        return datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y")
+    except ValueError:
+        pass
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def load_x_posts(path: Path) -> list[dict]:
+    """JSON array, {"posts"|"tweets":[...]}, one object, or NDJSON.
+
+    Each item: account|userName|user, text, likes|likeCount, url?, created|createdAt?
+    (ISO, Unix, or Twitter createdAt). Built so Grok Bot (or anything) can dump timelines
+    without AIsa.
+    """
+    raw = path.read_text().strip()
+    if not raw:
+        return []
+    items: list | dict
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        # NDJSON (one JSON object per line), including files that start with "{"
+        parsed = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if isinstance(parsed, list):
+        items = parsed
+    elif isinstance(parsed, dict):
+        items = parsed.get("posts") or parsed.get("tweets") or [parsed]
+    else:
+        items = []
     posts = []
-    for h in handles:
-        for tw in ((data.get(h) or {}).get("data") or {}).get("tweets") or []:
-            posts.append({"account": h, "text": tw.get("text") or "", "likes": int(tw.get("likeCount") or 0),
-                          "url": tw.get("url", ""), "created": _posted(tw)})
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        account = (it.get("account") or it.get("userName") or it.get("user") or "").lstrip("@")
+        if not account:
+            continue
+        created = it.get("created")
+        if created is None and "createdAt" in it:
+            created = _parse_created(it.get("createdAt"))
+        else:
+            created = _parse_created(created)
+        posts.append({"account": account, "text": it.get("text") or "",
+                      "likes": int(it.get("likes") or it.get("likeCount") or 0),
+                      "url": it.get("url") or "", "created": created})
+    return posts
+
+
+def x_new(cfg: dict, state: Path) -> dict:
+    """Fetch recent posts (file dump or AIsa), then report novel names.
+
+    Order: RADAR_X_POSTS_FILE / x_posts_file → AIsa (needs key) → skip with a reason.
+    A missing key never aborts the rest of the radar.
+    """
+    handles = accounts(cfg)
+    dump = x_posts_file(cfg)
+    cost, source, data = 0, "aisa", {}
+    if dump is not None:
+        if not dump.exists():
+            return {"skipped": True, "reason": f"X posts file not found: {dump}"}
+        posts = load_x_posts(dump)
+        source = "file"
+        answered = len({p["account"] for p in posts})
+        account_n = len(handles) or answered
+    elif not handles:
+        return {"skipped": True, "reason": "no x_accounts in config"}
+    elif not aisa.has_key():
+        return {"skipped": True, "reason": "no AIsa key and no RADAR_X_POSTS_FILE"}
+    else:
+        # AIsa path. has_key() already checked; still catch a vanished key mid-run.
+        try:
+            data, cost = aisa.call_all([{"call_id": h, "tool": "get_twitter_user_last_tweets",
+                                         "arguments": {"userName": h}} for h in handles])
+        except aisa.AisaError as exc:
+            if "no AIsa key" in str(exc):
+                return {"skipped": True, "reason": "no AIsa key and no RADAR_X_POSTS_FILE"}
+            raise
+        posts = []
+        for h in handles:
+            for tw in ((data.get(h) or {}).get("data") or {}).get("tweets") or []:
+                posts.append({"account": h, "text": tw.get("text") or "", "likes": int(tw.get("likeCount") or 0),
+                              "url": tw.get("url", ""), "created": _posted(tw)})
+        answered, account_n = len(data), len(handles)
     path = state / "x_vocab.json.gz"
     vocab: dict[str, str] | None = snap.load(path)
     first_run = vocab is None
@@ -108,8 +212,8 @@ def x_new(cfg: dict, state: Path) -> dict:
             vocab[term] = today
     if posts and not overview:   # an overview must not consume tomorrow's new names
         snap.save(path, {term: d for term, d in vocab.items() if d >= cutoff})
-    return {"accounts": len(handles), "answered": len(data), "posts": len(posts), "cost_micros": cost,
-            "first_run": first_run, "overview": overview, "terms": rows}
+    return {"accounts": account_n, "answered": answered, "posts": len(posts), "cost_micros": cost,
+            "source": source, "first_run": first_run, "overview": overview, "terms": rows}
 
 
 _HF_NOISE = re.compile(r"[-_.](gguf|ggml|awq|gptq|fp8|fp16|bf16|int[48]|mlx|exl2|onnx|uncensored|abliterated|"

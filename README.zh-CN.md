@@ -28,7 +28,7 @@
 
 | 信号 | 抓什么 | 需要 | 花费 |
 |---|---|---|---|
-| ① X | 你关注的账号里，60 天内第一次出现的名字 | AIsa key | 每个账号每次 $0.003 |
+| ① X | 你关注的账号里，60 天内第一次出现的名字 | AIsa key，**或** `RADAR_X_POSTS_FILE` / `x_posts_file` 注入的 JSON/NDJSON（例如用 Grok Bot 拉时间线） | 走 AIsa 时每个账号每次 $0.003；文件注入免费 |
 | ① Hugging Face | 新进热门榜前 50 的模型和 Space（大家实际在试的 demo）；量化版、微调版和模型自己的 demo 归到同一个基础名下 | 无 | 免费 |
 | ② GitHub 爆发 | 创建不到 14 天、平均每天涨 200 星以上，或比昨天多 400 星的仓库；附带大家实际会搜的写法（「niko strata」） | 无（有 GitHub token 限额更高） | 免费 |
 | ③ 竞品 sitemap | 某个站新增的几个网址共用、而它的旧网址里很少出现的词。示例配置盯着 8 个 AI 工具导航站（toolify、aixploria、ai-bot.cn、opentools、dang.ai、clipfly、aitoptools、futurepedia）和 4 个 MCP、skill 目录 | 你列出的 sitemap | 免费 |
@@ -136,15 +136,27 @@ TrustMRR 的 API 条款禁止转载它的数据，也禁止拿它做公开的 SE
 
 读不到的：App Store、Google Play、Trustpilot 的评论（DataForSEO 是「先提交、后取结果」的任务接口，AIsa 只支持同步调用）；There's An AI For That 的求助板（每个页面前都有 Cloudflare 挑战，硬闯就是绕过对方的反爬，雷达不做）；Facebook 小组（Meta 2024 年 4 月关闭了 Groups API，它的研究数据库只对获批的学术和非营利研究者开放）。
 
-## 一个必需的 key，一个可选的
+## 一个 key，和一个可选的
 
-所有付费的部分都走 [AIsa](https://go.aisa.one/yansen-zhu)：X 帖子、Google Trends 和域名数据（背后是 DataForSEO）、判断名字的模型。一个 key，按次付费，不用分别订阅 X API 和 DataForSEO。
+**AIsa 不只是用来跑 X 的。** 付费部分走 [AIsa](https://go.aisa.one/yansen-zhu)：可选的 X 帖子、Google Trends 和域名数据（背后是 DataForSEO）、判断名字和写词表的模型。一个 key，按次付费，不用分别订阅 X API 和 DataForSEO。
 
 > 上面是推荐链接：通过它注册是对这个项目的支持。从 aisa.one 任何入口拿到的 key 用起来完全一样。
 
+**不用 AIsa 也能跑 X：** 设置 `RADAR_X_POSTS_FILE`（或配置里的 `x_posts_file`），指向 JSON 数组、`{"posts":[...]}` 或 NDJSON，每条含 `account`、`text`、`likes`、`created`（ISO 或 Twitter 的 `createdAt`）。Grok Bot 或其他工具导出的时间线都可以。设置了文件后，信号 ① 优先用文件，不再走 AIsa。
+
 **可选：`GOANYAPI_API_KEY`**（[goanyapi.com](https://goanyapi.com/r/ga-95708898fb)）从两方面改进新词表，每天约 $0.07：给每个名字加上 Google Trends 的相关查询；名字和规模较大的通用词（月搜 1,000 以上，最多 8 行）的走势，改用单个国家的 30 天日数据来读，这份数据结算到昨天。这些行的「现在」一列后面会标出国家，例如 `还在涨 (US)`。不配这个 key，新词表只用模型提出的写法和全球数据。这个服务很新（2026 年 8 月才发布）；我们测试时每次调用要 20 到 55 秒，大约十次有一次失败，所以雷达会试两次，失败就写在表里，继续往下跑。上面这个也是推荐链接。
 
-没有 AIsa 的 key 时，免费的信号照常运行（Hugging Face、GitHub、sitemap、Search Console），只是报告里所有词不分先后列出，因为没有模型判断哪些是名字。
+### 免费路径（没有 `AISA_API_KEY`）
+
+没有 AIsa key 时，免费信号照常跑：**Hugging Face、GitHub 爆发、sitemap**，配了就还有 Search Console；若设置了 `RADAR_X_POSTS_FILE`，**文件注入的 X** 也会跑。付费步骤（AIsa 读 X、新站、求助、新卖家、复盘、新词表、名字判断、research）会**自动跳过，并在报告和 stderr 里写一行原因**，整次运行不会崩。报告里免费路径抓到的词会原样列出（没有模型区分哪些是名字；除非你另外配了 `RADAR_LLM_BASE_URL` + `RADAR_LLM_API_KEY` 给 judge 用）。
+
+```bash
+cp config.example.json config.json   # 改账号 / sitemap；AIsa key 可选
+# 可选：文件注入 X
+# export RADAR_X_POSTS_FILE=/path/to/posts.json
+python -m radar daily --out report.md
+# 或：./run-local.sh   # 默认跳过一批可选的重信号；.env 可有可无
+```
 
 ## 快速开始
 
@@ -154,8 +166,9 @@ TrustMRR 的 API 条款禁止转载它的数据，也禁止拿它做公开的 SE
 git clone https://github.com/zhuyansen/new-term-radar
 cd new-term-radar
 cp config.example.json config.json      # 然后编辑：你的 X 账号、sitemap、主题；想要中文报告把 lang 改成 "zh"
-export AISA_API_KEY=...                 # 从 https://go.aisa.one/yansen-zhu 获取；用 AIsa 命令行 `aisa login` 登录过也可以
-python -m radar daily --out report.md
+# 付费信号可选：export AISA_API_KEY=...   # https://go.aisa.one/yansen-zhu 或 `aisa login`
+# 文件注入 X（不用 AIsa）：export RADAR_X_POSTS_FILE=/path/to/posts.json
+python -m radar daily --out report.md   # 免费信号必跑；没 key 时付费步骤自动跳过
 ```
 
 第一次运行只是建立快照：昨天的 X 词表、星数、sitemap 网址都还没有，所以只会报出 GitHub 爆发仓库（它不依赖昨天的数据）。从第二次运行起，每个信号都会报告变化。

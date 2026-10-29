@@ -28,7 +28,7 @@ Purple, tagged NEW: what 0.3 to 0.5 added (⑥ revenue, ⑦ Reddit asks, ⑧ sel
 
 | Signal | What it catches | Needs | Cost |
 |---|---|---|---|
-| ① X | Names the accounts in your list used for the first time in 60 days | AIsa key | $0.003 per account per run |
+| ① X | Names the accounts in your list used for the first time in 60 days | AIsa key, **or** a JSON/NDJSON dump via `RADAR_X_POSTS_FILE` / `x_posts_file` (e.g. from Grok Bot) | $0.003 per account per run via AIsa; free when file-backed |
 | ① Hugging Face | Models and Spaces (the demos people try) new to the trending top 50; quantised copies and a model's own demo grouped under the base name | nothing | free |
 | ② GitHub breakout | A repo under 14 days old averaging 200+ stars a day, or +400 since yesterday; adds the search variants people use ("niko strata") | nothing (a GitHub token raises the rate limit) | free |
 | ③ Sitemaps | Words that several new URLs on a site share and its older URLs rarely carried. The example config watches eight AI tool directories (toolify, aixploria, ai-bot.cn, opentools, dang.ai, clipfly, aitoptools, futurepedia) and four MCP and skill directories | the sitemaps you list | free |
@@ -136,13 +136,25 @@ What it cannot read: App Store, Google Play and Trustpilot reviews (DataForSEO s
 
 ## One key, and an optional second
 
-Everything the radar needs goes through [AIsa](https://go.aisa.one/yansen-zhu): X posts, Google Trends and domain data (DataForSEO behind it) and the models that judge names and propose phrases. One key, pay per call, no subscriptions to X's API or DataForSEO.
+**AIsa is not only for X.** Paid parts go through [AIsa](https://go.aisa.one/yansen-zhu): optional X posts, Google Trends and domain data (DataForSEO behind it), and the models that judge names and propose phrases. One key, pay per call, no subscriptions to X's API or DataForSEO.
 
 > That link is a referral link: signing up through it supports this project. The radar works the same with a key from anywhere on aisa.one.
 
+**X without AIsa:** set `RADAR_X_POSTS_FILE` (or `x_posts_file` in config) to a JSON array, `{"posts":[...]}`, or NDJSON of `{account, text, likes, created}` (ISO or Twitter `createdAt`). Grok Bot or any timeline dump works. When the file is set it wins over AIsa for signal ①.
+
 **Optional: `GOANYAPI_API_KEY`** ([goanyapi.com](https://goanyapi.com/r/ga-95708898fb)) improves the keyword table in two ways, for about $0.07 a day: it adds Google Trends' related queries for each name, and it reads the curve of the names and the bigger generic terms (1,000 searches a month or more, eight rows at most) from 30 days of daily data for one country, settled to yesterday. Those rows show the country after "Now", as in `still rising (US)`. Without the key the table is built from the model's phrases and the worldwide series alone. The service is young (first released in August 2026); in our tests calls took 20 to 55 seconds and about one in ten failed, so the radar tries twice, reports a failure in the table and carries on. That link is a referral link too.
 
-Without an AIsa key the free signals still run (Hugging Face, GitHub, sitemaps, Search Console); the report then lists every term unsorted, because nothing judges which are names.
+### Free path (no `AISA_API_KEY`)
+
+Without an AIsa key the free signals still run: **Hugging Face, GitHub breakout, sitemaps**, plus Search Console if configured, and **file-backed X** if you set `RADAR_X_POSTS_FILE`. Paid steps (AIsa X, new sites, asks, sellers, review, keyword table, name judge, research) **auto-skip with a one-line reason** in the report and on stderr — the run does not crash. The report then lists every free-path term unsorted, because nothing judges which are names (unless you set `RADAR_LLM_BASE_URL` + `RADAR_LLM_API_KEY` for the judge).
+
+```bash
+cp config.example.json config.json   # edit accounts / sitemaps; AIsa key optional
+# optional file-backed X:
+# export RADAR_X_POSTS_FILE=/path/to/posts.json
+python -m radar daily --out report.md
+# or: ./run-local.sh   # skips heavy optional signals by default; .env optional
+```
 
 ## Quick start
 
@@ -152,8 +164,10 @@ Python 3.10 or newer. The radar uses only the standard library.
 git clone https://github.com/zhuyansen/new-term-radar
 cd new-term-radar
 cp config.example.json config.json      # then edit: your X accounts, sitemaps, topics
-export AISA_API_KEY=...                 # from https://go.aisa.one/yansen-zhu; or `aisa login` with the AIsa CLI
-python -m radar daily --out report.md
+# Optional for paid signals (Trends, judge, keyword table, AIsa X):
+# export AISA_API_KEY=...               # from https://go.aisa.one/yansen-zhu; or `aisa login`
+# Optional file-backed X (no AIsa): export RADAR_X_POSTS_FILE=/path/to/posts.json
+python -m radar daily --out report.md   # free signals always run; paid ones auto-skip without a key
 ```
 
 The first run builds its snapshots: yesterday's X vocabulary, star counts and sitemap URLs do not exist yet, so only GitHub breakouts (which need no yesterday) are reported. From the second run on, every signal reports what changed.

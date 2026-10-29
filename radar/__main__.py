@@ -4,7 +4,7 @@
   python -m radar sources  [--config config.json] [--state state] [--out sources.md] [--mail]
 
 Signals:
-  ① x         names the accounts you follow said for the first time (AIsa)
+  ① x         names the accounts you follow said for the first time (AIsa, or RADAR_X_POSTS_FILE)
   ① hf        models new to Hugging Face's trending top 50
   ② breakout  one new GitHub repo taking off on its own
   ③ sitemaps  pages other sites added since the last run
@@ -40,20 +40,46 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from . import asks, breakout, config, gsc, new_sites, notify, pains, report, research, review, revenue, sellers, sitemaps, sources, store, usecases
+from . import aisa, asks, breakout, config, gsc, new_sites, notify, pains, report, research, review, revenue, sellers, sitemaps, sources, store, usecases
 from .i18n import t
 
 SKIPPABLE = {"x", "hf", "breakout", "sitemaps", "newsites", "revenue", "asks", "sellers", "gsc", "review", "judge", "usecases", "tutorials", "research"}
 
 
-def run(fn, skip: bool = False) -> dict:
-    """One signal failing still leaves a report: its error takes its place."""
+def run(fn, skip: bool = False, reason: str = "") -> dict:
+    """One signal failing still leaves a report: its error takes its place.
+
+    `reason` is a one-line explanation when we auto-skip (no key, free path, etc.).
+    """
     if skip:
-        return {"skipped": True}
+        out: dict = {"skipped": True}
+        if reason:
+            out["reason"] = reason
+        return out
     try:
         return fn()
     except Exception as exc:  # noqa: BLE001
         return {"error": f"{type(exc).__name__}: {' '.join(str(exc).split())[:160]}"}
+
+
+# Signals that need AIsa's tool router (not just chat). Without a key they auto-skip.
+_AISA_TOOL = frozenset({"newsites", "asks", "sellers", "review", "usecases", "tutorials"})
+# Signals that need chat (AIsa or RADAR_LLM_*).
+_AISA_CHAT = frozenset({"judge", "research", "tutorials", "asks", "sellers", "usecases"})
+
+
+def _auto_reason(name: str) -> str:
+    """Why a paid signal should auto-skip, or empty if it can run."""
+    if name in _AISA_TOOL and not aisa.has_key():
+        return "no AIsa key"
+    if name in _AISA_CHAT and not aisa.llm_ready():
+        return "no AIsa key and no RADAR_LLM_BASE_URL"
+    return ""
+
+
+def _note_skip(name: str, reason: str) -> None:
+    if reason:
+        print(f"skip {name}: {reason}", file=sys.stderr)
 
 
 def _finish(args, text: str, subject: str) -> None:
@@ -67,6 +93,12 @@ def _finish(args, text: str, subject: str) -> None:
 def cmd_sources(args, cfg: dict, state: Path) -> int:
     blocks = {"x": run(lambda: sources.x_new(cfg, state), "x" in args.skip),
               "hf": run(lambda: sources.hf_new(cfg, state), "hf" in args.skip)}
+    # Judge: empty model = skip; auto-clear when no chat backend.
+    jreason = _auto_reason("judge")
+    if "judge" in args.skip or jreason:
+        if jreason and "judge" not in args.skip:
+            _note_skip("judge", jreason)
+        cfg["judge"]["model"] = ""
     lead, judged = report.leads(cfg, blocks)
     conn = store.connect(state)
     extra = {"judge": judged, "record": run(lambda: {"recorded": store.record(conn, report.to_record(cfg, lead))})}
@@ -82,36 +114,66 @@ def cmd_sources(args, cfg: dict, state: Path) -> int:
 def cmd_daily(args, cfg: dict, state: Path) -> int:
     overview = cfg.get("_overview", False)
     weekly = args.new_sites or date.today().weekday() == cfg["new_sites"]["weekday"]
+    # Auto-skip paid AIsa signals when there is no key, with a one-line reason.
+    # Free signals (hf, breakout, sitemaps) and file-backed X still run.
+    jreason = _auto_reason("judge")
+    if "judge" in args.skip or jreason:
+        if jreason and "judge" not in args.skip:
+            _note_skip("judge", jreason)
+        cfg["judge"]["model"] = ""
+    rreason = _auto_reason("research")
+    if "research" in args.skip or rreason:
+        if rreason and "research" not in args.skip:
+            _note_skip("research", rreason)
+        cfg["research"]["enabled"] = False
+
+    def _paid(name: str, otherwise: bool) -> tuple[bool, str]:
+        """(skip?, reason). `otherwise` is True when the schedule/flag already skips it."""
+        if otherwise:
+            return True, ""
+        if name in args.skip:
+            return True, ""
+        reason = _auto_reason(name)
+        if reason:
+            _note_skip(name, reason)
+            return True, reason
+        return False, ""
+
+    ns_skip, ns_why = _paid("newsites", overview or not weekly)
+    rv_day = args.revenue or date.today().weekday() == cfg["revenue"]["weekday"]
+    ak_day = args.asks or date.today().weekday() == cfg["asks"]["weekday"]
+    sl_day = args.sellers or date.today().weekday() == cfg["sellers"]["weekday"]
+    ak_skip, ak_why = _paid("asks", overview or not ak_day)
+    sl_skip, sl_why = _paid("sellers", overview or not sl_day)
     blocks = {
         "x": run(lambda: sources.x_new(cfg, state), "x" in args.skip),
         "hf": run(lambda: sources.hf_new(cfg, state), "hf" in args.skip),
         "breakout": run(lambda: breakout.breakouts(cfg, state), "breakout" in args.skip),
         "sitemap": run(lambda: sitemaps.diff(cfg, state), overview or "sitemaps" in args.skip),
-        "newsite": run(lambda: new_sites.new_sites(cfg, state), overview or "newsites" in args.skip or not weekly),
-        "revenue": run(lambda: revenue.products(cfg, state), overview or "revenue" in args.skip or not (
-            args.revenue or date.today().weekday() == cfg["revenue"]["weekday"])),
-        "ask": run(lambda: asks.asks(cfg, state), overview or "asks" in args.skip or not (
-            args.asks or date.today().weekday() == cfg["asks"]["weekday"])),
-        "seller": run(lambda: sellers.sellers(cfg, state), overview or "sellers" in args.skip or not (
-            args.sellers or date.today().weekday() == cfg["sellers"]["weekday"])),
+        "newsite": run(lambda: new_sites.new_sites(cfg, state), ns_skip, ns_why),
+        "revenue": run(lambda: revenue.products(cfg, state), overview or "revenue" in args.skip or not rv_day),
+        "ask": run(lambda: asks.asks(cfg, state), ak_skip, ak_why),
+        "seller": run(lambda: sellers.sellers(cfg, state), sl_skip, sl_why),
     }
     found = run(lambda: gsc.gsc_new(cfg), overview or "gsc" in args.skip)
     lead, judged = report.leads(cfg, blocks)
     conn = store.connect(state)
     extra = {"judge": judged, "record": run(lambda: {"recorded": store.record(conn, report.to_record(cfg, lead))}, overview)}
     # What the viewers of a widely shared walkthrough ask for: the one-click tool behind a ⚡ lead.
-    extra["tutorials"] = run(lambda: pains.tutorial_asks(cfg, report.named(cfg, lead)),
-                             overview or "tutorials" in args.skip or not cfg["tutorials"]["max_leads"])
+    tu_skip, tu_why = _paid("tutorials", overview or not cfg["tutorials"]["max_leads"])
+    extra["tutorials"] = run(lambda: pains.tutorial_asks(cfg, report.named(cfg, lead)), tu_skip, tu_why)
     # With ① run apart, the daily report lists what that job kept since yesterday.
     extra["recent_sources"] = run(lambda: {"rows": store.recent_sources(conn)}, overview or not {"x", "hf"} <= args.skip)
     # The names to read for their generic terms: things, not words that surged (usecases.names_to_read).
     names = usecases.names_to_read(report.to_record(cfg, lead), extra["recent_sources"].get("rows", []))
     repos = {r["term"]: r["repo"] for r in lead if r.get("repo")}
     about = {r["term"]: r["about"] for r in lead if r.get("about")}      # a paying product's own description
+    uc_skip, uc_why = _paid("usecases", overview or not cfg["usecases"]["per_day"])
     extra["usecases"] = run(lambda: usecases.run(cfg, state, list(dict.fromkeys(names)), repos, texts=about),
-                            overview or "usecases" in args.skip or not cfg["usecases"]["per_day"])
+                            uc_skip, uc_why)
     run(lambda: store.record(conn, report.usecase_leads(extra["usecases"])), overview)
-    rev = run(lambda: review.review(cfg, conn), overview or "review" in args.skip)
+    rev_skip, rev_why = _paid("review", overview)
+    rev = run(lambda: review.review(cfg, conn), rev_skip, rev_why)
     summ = run(lambda: store.summary(conn))
     original = report.daily(cfg, lead, blocks, found, rev, summ, extra)
     researched = run(lambda: research.enrich(cfg, lead))
