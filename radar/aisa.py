@@ -77,9 +77,17 @@ def llm_ready() -> bool:
 
 
 def _post(url: str, body: dict, timeout: int, *, api_key: str | None = None) -> dict:
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
-        "Content-Type": "application/json", "Authorization": f"Bearer {key() if api_key is None else api_key}",
-        "User-Agent": UA, "x-aisa-source": "new-term-radar"})
+    import uuid
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key() if api_key is None else api_key}",
+        "User-Agent": UA,
+        "x-aisa-source": "new-term-radar",
+    }
+    # OpenCode Go requires a stable per-conversation session id.
+    if os.environ.get("RADAR_LLM_BASE_URL", "").strip() and api_key is not None:
+        headers["x-opencode-session"] = os.environ.get("RADAR_LLM_SESSION", "").strip() or str(uuid.uuid4())
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers=headers)
     opener = urllib.request.urlopen
     if urllib.parse.urlsplit(url).hostname in {"127.0.0.1", "localhost", "::1"}:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
